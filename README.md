@@ -1,2 +1,2 @@
 # skills
-skills for AI agent
+To share useful skills for AI agent
