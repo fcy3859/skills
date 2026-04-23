@@ -130,11 +130,12 @@ Write back to same file. Return "done" when complete.
 ### Batch Process (3 sub-agents at a time)
 
 ```
-1. Launch 3 sub-agents (each translates 1 file)
-2. Wait for all 3 to complete
-3. Verify each file
-4. If any fail → retry once
-5. All pass → next batch
+1. Record original file sizes (before translation)
+2. Launch 3 sub-agents (each translates 1 file)
+3. Wait for all 3 to complete
+4. Verify each file (size > 50% of original)
+5. If any fail → retry once
+6. All pass → next batch
 ```
 
 ---
@@ -146,16 +147,35 @@ Write back to same file. Return "done" when complete.
 | # | Check | Command | Pass Criteria |
 |---|-------|---------|---------------|
 | 1 | File exists | `ls file.xhtml` | File listed |
-| 2 | File size | `Get-Item file.xhtml` | >1,000 bytes |
+| 2 | File size vs original | Compare sizes | Translated > 50% of original |
 | 3 | Has Chinese | `head -5 file.xhtml` | Contains Chinese chars |
 | 4 | lang attribute | `Select-String "lang" file.xhtml` | Contains "zh-cn" |
+
+### Record Original Sizes (Before Translation)
+
+Before starting batch translation, record original file sizes:
+
+```powershell
+# PowerShell: Save original sizes to a hashtable
+$originalSizes = @{}
+Get-ChildItem "book_extracted\text\*.html" | ForEach-Object { 
+    $originalSizes[$_.Name] = $_.Length 
+}
+```
+
+Or on Linux/Mac:
+
+```bash
+# Save original sizes to a file
+ls -la book_extracted/text/*.html | awk '{print $9, $5}' > original_sizes.txt
+```
 
 ### Failure Handling
 
 | Failure | Action |
 |---------|--------|
 | File not exists | Retry translation immediately |
-| File too small (<10KB) | Retry translation immediately |
+| File too small (<50% of original) | Retry translation immediately |
 | No Chinese content | Retry translation immediately |
 | lang="en-us" | Fix with: `(Get-Content $f) -replace 'en-us','zh-cn'` |
 | Retry fails | Log error, continue to next file |
@@ -163,14 +183,21 @@ Write back to same file. Return "done" when complete.
 ### Verification Commands (Windows PowerShell)
 
 ```powershell
-# Check file sizes
-Get-ChildItem "book_extracted\ch*.xhtml" | Select-Object Name, @{N='Size';E={'{0:N0}' -f $_.Length}}
+# Compare translated file size with original (using saved hashtable)
+$translatedSize = (Get-Item "part0005.html").Length
+$originalSize = $originalSizes["part0005.html"]
+$percentage = [math]::Round(($translatedSize / $originalSize) * 100, 1)
+Write-Host "Translated: $translatedSize bytes ($percentage% of original)"
+
+if ($translatedSize -lt ($originalSize * 0.5)) { 
+    Write-Host "FAIL: Translated file is less than 50% of original size"
+}
 
 # Check for lang attribute
-Select-String -Path "ch01.xhtml" -Pattern "lang="
+Select-String -Path "part0005.html" -Pattern "lang="
 
 # Check first few lines
-Get-Content "ch01.xhtml" -TotalCount 5
+Get-Content "part0005.html" -TotalCount 5
 ```
 
 ---
@@ -268,10 +295,10 @@ Batch N: ch0X, ch0Y, ch0Z
 ├─ Launch 3 sub-agents
 ├─ Wait for completion
 ├─ Verify:
-│  ├─ ls -la ch0X.xhtml → exists?
-│  ├─ get size          → >10KB?
-│  ├─ head -5           → has Chinese?
-│  └─ grep "lang"       → zh-cn?
+│  ├─ ls -la ch0X.html     → exists?
+│  ├─ compare size         → >50% of original?
+│  ├─ head -5              → has Chinese?
+│  └─ grep "lang"         → zh-cn?
 └─ Result: all pass → next batch
 ```
 
@@ -283,8 +310,9 @@ Batch N: ch0X, ch0Y, ch0Z
 |------|---------|
 | Extract EPUB | `Expand-Archive -Path *.epub -DestinationPath dir` |
 | List content | `Get-ChildItem -Recurse -Name *.xhtml` |
+| Record original sizes | `$originalSizes = @{...}` or `ls > sizes.txt` |
 | Batch translate | Launch 3 sub-agents, wait, verify |
-| Verify file | `Get-Item file.xhtml \| Select Name, Length` |
+| Verify file size | Compare translated vs original (must be >50%) |
 | Check lang | `Select-String -Path file.xhtml -Pattern "lang="` |
 | Batch fix lang | `Get-ChildItem *.xhtml \| %{(Get-Content $_) -replace 'en-us','zh-cn'}` |
 | Pack EPUB | `Compress-Archive -Path * -DestinationPath out.epub` |
